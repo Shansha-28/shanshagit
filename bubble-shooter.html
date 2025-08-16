@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>Bubble Shooter - Single File</title>
+	<style>
+		:root {
+			--bg-1: #0e0f13;
+			--bg-2: #1a1d24;
+			--panel: #10131a;
+			--text: #e8eefc;
+			--accent: #5cc8ff;
+		}
+
+		html, body {
+			margin: 0;
+			padding: 0;
+			height: 100%;
+			background: radial-gradient(1200px 800px at 20% 10%, var(--bg-2), var(--bg-1));
+			color: var(--text);
+			font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+			user-select: none;
+		}
+
+		.container {
+			display: grid;
+			grid-template-rows: auto 1fr auto;
+			gap: 10px;
+			place-items: center;
+			height: 100%;
+			padding: 12px;
+			box-sizing: border-box;
+		}
+
+		.header {
+			font-weight: 700;
+			letter-spacing: 0.5px;
+			opacity: 0.9;
+		}
+
+		.canvas-wrap {
+			position: relative;
+			background: linear-gradient(180deg, #0b0c10 0%, #0f1117 100%);
+			border-radius: 12px;
+			box-shadow: 0 10px 30px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.04);
+			padding: 10px;
+		}
+
+		#game {
+			display: block;
+			background: radial-gradient(900px 600px at 50% -20%, #18202c 0%, #0e121a 60%);
+			border-radius: 8px;
+			box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05);
+		}
+
+		.hud {
+			position: absolute;
+			top: 14px;
+			left: 16px;
+			display: flex;
+			gap: 14px;
+			font-size: 14px;
+			background: rgba(0,0,0,0.28);
+			backdrop-filter: blur(4px);
+			border-radius: 8px;
+			padding: 6px 10px;
+			box-shadow: 0 6px 18px rgba(0,0,0,0.25), inset 0 0 0 1px rgba(255,255,255,0.06);
+		}
+
+		.badge {
+			padding: 2px 8px;
+			border-radius: 999px;
+			background: rgba(92, 200, 255, 0.12);
+			inset: 0 0 0 1px rgba(255,255,255,0.06);
+			color: var(--text);
+		}
+
+		.footer {
+			opacity: 0.75;
+			font-size: 12px;
+		}
+
+		.overlay {
+			position: absolute;
+			inset: 10px;
+			display: grid;
+			place-items: center;
+			pointer-events: none;
+		}
+
+		.overlay > .panel {
+			pointer-events: auto;
+			background: rgba(19, 23, 32, 0.88);
+			backdrop-filter: blur(8px);
+			border-radius: 12px;
+			padding: 18px 22px;
+			text-align: center;
+			box-shadow: 0 12px 34px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.06);
+		}
+
+		.overlay h2 {
+			margin: 0 0 8px;
+		}
+
+		.overlay p { margin: 6px 0; }
+
+		.button {
+			display: inline-block;
+			background: linear-gradient(180deg, #2b6cb0, #2c5282);
+			color: white;
+			padding: 8px 14px;
+			border-radius: 8px;
+			text-decoration: none;
+			cursor: pointer;
+			box-shadow: 0 8px 18px rgba(0,0,0,0.3);
+		}
+		.button:active { transform: translateY(1px); }
+	</style>
+</head>
+<body>
+	<div class="container">
+		<div class="header">Bubble Shooter</div>
+		<div class="canvas-wrap">
+			<canvas id="game" width="480" height="720"></canvas>
+			<div class="hud" id="hud">
+				<div class="badge" id="scoreLabel">Score: 0</div>
+				<div class="badge" id="shotsLabel">Shots: 0</div>
+			</div>
+			<div class="overlay" id="overlay" style="display:none">
+				<div class="panel">
+					<h2 id="overlayTitle">Game Over</h2>
+					<p id="overlayMsg">Bubbles reached the bottom.</p>
+					<p><a class="button" id="restartBtn">Restart (R)</a></p>
+				</div>
+			</div>
+		</div>
+		<div class="footer">Aim with mouse or arrow keys. Click or press Space to shoot. Bubbles slowly drift down. Pop 3+ to score.</div>
+	</div>
+
+	<script>
+	(function() {
+		"use strict";
+
+		// Canvas & Rendering
+		const canvas = document.getElementById("game");
+		const ctx = canvas.getContext("2d");
+
+		// HUD & Overlay
+		const scoreLabel = document.getElementById("scoreLabel");
+		const shotsLabel = document.getElementById("shotsLabel");
+		const overlay = document.getElementById("overlay");
+		const overlayTitle = document.getElementById("overlayTitle");
+		const overlayMsg = document.getElementById("overlayMsg");
+		const restartBtn = document.getElementById("restartBtn");
+
+		// Configuration
+		const CANVAS_WIDTH = canvas.width;   // Drawing resolution
+		const CANVAS_HEIGHT = canvas.height;
+		const BUBBLE_RADIUS = 16;
+		const BUBBLE_DIAMETER = BUBBLE_RADIUS * 2;
+		const VERTICAL_STEP = Math.sqrt(3) * BUBBLE_RADIUS; // hex packing vertical spacing
+		const GRID_MARGIN_X = 16; // left/right margin for grid & wall bounces
+		const SHOOTER_Y = CANVAS_HEIGHT - 40; // shooter baseline
+		const MAX_AIM_ANGLE_FROM_VERTICAL = degToRad(70); // limit left/right aim from vertical
+		const AIM_KEY_ROTATE_SPEED = degToRad(140); // deg/sec rotation via arrows
+		const PROJECTILE_SPEED = 560; // px/sec
+		const DRIFT_SPEED_PX_PER_SEC = 5.0; // downward drift of the grid
+		const COLORS = ["#ff5c5c", "#ffd166", "#6ecb63", "#57b6ff", "#a78bfa"];
+		const POP_SCORE = 10; // per popped bubble
+		const DROP_SCORE = 5; // per dropped bubble (not connected to top)
+
+		// Grid data
+		let gridRows = []; // Array<Row>
+		let gridTopY = 0; // top edge of grid in pixels, drifts down over time
+		let evenRowNumCols = 0;
+		let oddRowNumCols = 0;
+
+		// Game State
+		let score = 0;
+		let shotsFired = 0;
+		let isGameOver = false;
+		let lastTimestamp = 0;
+
+		// Shooter & Projectile
+		let aimAngleFromVertical = 0; // 0 = straight up; positive = tilt right; negative = tilt left
+		let isLeftPressed = false;
+		let isRightPressed = false;
+		let isSpacePressed = false;
+
+		let currentBubbleColor = randomColor();
+		let nextBubbleColor = randomColor();
+		let projectile = null; // { x, y, vx, vy, color }
+
+		// Input Tracking for Mouse
+		let lastPointerX = CANVAS_WIDTH / 2;
+		let lastPointerY = CANVAS_HEIGHT / 2;
+
+		// ---------- Utility ----------
+		function degToRad(deg) { return deg * Math.PI / 180; }
+		function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+		function randomInt(maxExclusive) { return Math.floor(Math.random() * maxExclusive); }
+		function randomColor() { return COLORS[randomInt(COLORS.length)]; }
+		function lerp(a, b, t) { return a + (b - a) * t; }
+
+		// ---------- Grid helpers ----------
+		function computeRowParity(rowIndex) { return (rowIndex % 2) !== 0; } // true for odd rows
+		function computeRowNumCols(rowIndex) { return computeRowParity(rowIndex) ? oddRowNumCols : evenRowNumCols; }
+		function cellCenter(rowIndex, colIndex) {
+			const isOdd = computeRowParity(rowIndex);
+			const leftEdge = GRID_MARGIN_X + (isOdd ? BUBBLE_RADIUS : 0);
+			const x = leftEdge + BUBBLE_RADIUS + colIndex * BUBBLE_DIAMETER;
+			const y = gridTopY + BUBBLE_RADIUS + rowIndex * VERTICAL_STEP;
+			return { x, y };
+		}
+		function inBounds(rowIndex, colIndex) {
+			if (rowIndex < 0 || rowIndex >= gridRows.length) return false;
+			const cols = computeRowNumCols(rowIndex);
+			return colIndex >= 0 && colIndex < cols;
+		}
+		function forEachBubble(callback) {
+			for (let r = 0; r < gridRows.length; r++) {
+				const row = gridRows[r];
+				for (let c = 0; c < row.cells.length; c++) {
+					const bubble = row.cells[c];
+					if (bubble) callback(r, c, bubble);
+				}
+			}
+		}
+		function getNeighbors(rowIndex, colIndex) {
+			const neighbors = [];
+			const isOdd = computeRowParity(rowIndex);
+			if (isOdd) {
+				// odd row offsets
+				const deltas = [
+					[0, -1], [0, 1],
+					[-1, 0], [-1, 1],
+					[1, 0], [1, 1]
+				];
+				for (const [dr, dc] of deltas) {
+					const nr = rowIndex + dr, nc = colIndex + dc;
+					if (inBounds(nr, nc)) neighbors.push([nr, nc]);
+				}
+			} else {
+				// even row offsets
+				const deltas = [
+					[0, -1], [0, 1],
+					[-1, -1], [-1, 0],
+					[1, -1], [1, 0]
+				];
+				for (const [dr, dc] of deltas) {
+					const nr = rowIndex + dr, nc = colIndex + dc;
+					if (inBounds(nr, nc)) neighbors.push([nr, nc]);
+				}
+			}
+			return neighbors;
+		}
+
+		// Find closest empty neighbor around a given cell, preferring cells nearest to (px, py)
+		function findClosestEmptyNeighborAround(baseRow, baseCol, px, py) {
+			let best = null;
+			let bestDist2 = Infinity;
+			const neighbors = getNeighbors(baseRow, baseCol);
+			for (const [nr, nc] of neighbors) {
+				if (gridRows[nr].cells[nc] === null) {
+					const { x, y } = cellCenter(nr, nc);
+					const dx = x - px, dy = y - py;
+					const d2 = dx * dx + dy * dy;
+					if (d2 < bestDist2) { bestDist2 = d2; best = { row: nr, col: nc }; }
+				}
+			}
+			return best;
+		}
+
+		// Broader search for an empty cell near a point (px, py)
+		function findClosestEmptyCell(px, py) {
+			// Approximate row/col by continuous mapping, then search a small window around
+			let approxRow = Math.round((py - gridTopY - BUBBLE_RADIUS) / VERTICAL_STEP);
+			approxRow = clamp(approxRow, 0, gridRows.length - 1);
+			const isOdd = computeRowParity(approxRow);
+			const leftEdge = GRID_MARGIN_X + (isOdd ? BUBBLE_RADIUS : 0);
+			let approxCol = Math.round((px - (leftEdge + BUBBLE_RADIUS)) / BUBBLE_DIAMETER);
+			approxCol = clamp(approxCol, 0, computeRowNumCols(approxRow) - 1);
+
+			let best = null;
+			let bestDist2 = Infinity;
+			const MAX_WINDOW = 3; // search window in rows/cols
+			for (let dr = -MAX_WINDOW; dr <= MAX_WINDOW; dr++) {
+				const r = approxRow + dr;
+				if (r < 0 || r >= gridRows.length) continue;
+				for (let dc = -MAX_WINDOW; dc <= MAX_WINDOW; dc++) {
+					const c = approxCol + dc;
+					if (!inBounds(r, c)) continue;
+					if (gridRows[r].cells[c] !== null) continue;
+					const { x, y } = cellCenter(r, c);
+					const dx = x - px, dy = y - py;
+					const d2 = dx * dx + dy * dy;
+					if (d2 < bestDist2) { bestDist2 = d2; best = { row: r, col: c }; }
+				}
+			}
+			return best;
+		}
+
+		// ---------- Cluster & Drop detection ----------
+		function findClusterSameColor(startRow, startCol) {
+			const target = gridRows[startRow].cells[startCol];
+			if (!target) return [];
+			const targetColor = target.color;
+			const visited = new Set();
+			const queue = [[startRow, startCol]];
+			visited.add(startRow + "," + startCol);
+			while (queue.length) {
+				const [r, c] = queue.shift();
+				const neighbors = getNeighbors(r, c);
+				for (const [nr, nc] of neighbors) {
+					const key = nr + "," + nc;
+					if (visited.has(key)) continue;
+					const b = gridRows[nr].cells[nc];
+					if (b && b.color === targetColor) {
+						visited.add(key);
+						queue.push([nr, nc]);
+					}
+				}
+			}
+			return Array.from(visited).map(k => k.split(",").map(Number));
+		}
+
+		function removeFloatingClusters() {
+			// Mark bubbles connected to the top row; remove the others
+			const visited = new Set();
+			const queue = [];
+			// enqueue all top-row bubbles
+			if (gridRows.length === 0) return 0;
+			for (let c = 0; c < gridRows[0].cells.length; c++) {
+				if (gridRows[0].cells[c]) {
+					queue.push([0, c]);
+					visited.add("0," + c);
+				}
+			}
+			while (queue.length) {
+				const [r, c] = queue.shift();
+				for (const [nr, nc] of getNeighbors(r, c)) {
+					const key = nr + "," + nc;
+					if (visited.has(key)) continue;
+					if (gridRows[nr].cells[nc]) {
+						visited.add(key);
+						queue.push([nr, nc]);
+					}
+				}
+			}
+			let removed = 0;
+			for (let r = 0; r < gridRows.length; r++) {
+				for (let c = 0; c < gridRows[r].cells.length; c++) {
+					if (gridRows[r].cells[c] && !visited.has(r + "," + c)) {
+						gridRows[r].cells[c] = null;
+						removed++;
+					}
+				}
+			}
+			return removed;
+		}
+
+		// ---------- Initialization ----------
+		function setupGrid() {
+			// Compute columns for even/odd rows based on width and margin
+			evenRowNumCols = Math.floor((CANVAS_WIDTH - 2 * GRID_MARGIN_X) / BUBBLE_DIAMETER);
+			oddRowNumCols = Math.max(1, evenRowNumCols - 1);
+
+			gridRows = [];
+			gridTopY = 0;
+
+			const initialRows = 8;
+			for (let r = 0; r < initialRows; r++) {
+				const cols = computeRowNumCols(r);
+				const cells = new Array(cols).fill(null).map(() => ({ color: randomColor() }));
+				gridRows.push({ cells });
+			}
+		}
+
+		function resetGame() {
+			score = 0;
+			shotsFired = 0;
+			isGameOver = false;
+			projectile = null;
+			currentBubbleColor = randomColor();
+			nextBubbleColor = randomColor();
+			aimAngleFromVertical = 0;
+			setupGrid();
+			updateHUD();
+			hideOverlay();
+		}
+
+		// ---------- HUD & Overlay ----------
+		function updateHUD() {
+			scoreLabel.textContent = `Score: ${score}`;
+			shotsLabel.textContent = `Shots: ${shotsFired}`;
+		}
+		function showOverlay(title, message) {
+			overlayTitle.textContent = title;
+			overlayMsg.textContent = message;
+			overlay.style.display = "grid";
+		}
+		function hideOverlay() { overlay.style.display = "none"; }
+
+		// ---------- Shooting & Aiming ----------
+		function pointerToAimAngleFromVertical(px, py) {
+			// Angle from vertical axis: left negative, right positive
+			const dx = px - (CANVAS_WIDTH / 2);
+			const dy = (SHOOTER_Y) - py; // positive when pointer is above shooter
+			let angle = Math.atan2(dx, Math.max(1e-6, dy)); // range [-PI, PI]; 0 = straight up
+			angle = clamp(angle, -MAX_AIM_ANGLE_FROM_VERTICAL, MAX_AIM_ANGLE_FROM_VERTICAL);
+			return angle;
+		}
+		function getAimVector() {
+			// Convert aimAngleFromVertical to a unit vector (x,y)
+			const x = Math.sin(aimAngleFromVertical);
+			const y = -Math.cos(aimAngleFromVertical);
+			return { x, y };
+		}
+		function shoot() {
+			if (isGameOver || projectile) return;
+			const dir = getAimVector();
+			projectile = {
+				x: CANVAS_WIDTH / 2,
+				y: SHOOTER_Y - BUBBLE_RADIUS - 2,
+				vx: dir.x * PROJECTILE_SPEED,
+				vy: dir.y * PROJECTILE_SPEED,
+				color: currentBubbleColor
+			};
+			currentBubbleColor = nextBubbleColor;
+			nextBubbleColor = randomColor();
+			shotsFired++;
+			updateHUD();
+		}
+
+		// ---------- Game Logic ----------
+		function update(dt) {
+			if (isGameOver) return;
+
+			// drift grid down
+			gridTopY += DRIFT_SPEED_PX_PER_SEC * dt;
+
+			// keyboard aim
+			if (isLeftPressed) aimAngleFromVertical -= AIM_KEY_ROTATE_SPEED * dt;
+			if (isRightPressed) aimAngleFromVertical += AIM_KEY_ROTATE_SPEED * dt;
+			aimAngleFromVertical = clamp(aimAngleFromVertical, -MAX_AIM_ANGLE_FROM_VERTICAL, MAX_AIM_ANGLE_FROM_VERTICAL);
+
+			// projectile movement
+			if (projectile) {
+				const leftBound = GRID_MARGIN_X + BUBBLE_RADIUS;
+				const rightBound = CANVAS_WIDTH - (GRID_MARGIN_X + BUBBLE_RADIUS);
+
+				projectile.x += projectile.vx * dt;
+				projectile.y += projectile.vy * dt;
+
+				// Bounce on walls
+				if (projectile.x <= leftBound) {
+					projectile.x = leftBound;
+					projectile.vx = Math.abs(projectile.vx);
+				}
+				if (projectile.x >= rightBound) {
+					projectile.x = rightBound;
+					projectile.vx = -Math.abs(projectile.vx);
+				}
+
+				// Collision with existing bubbles
+				let hitCell = null;
+				let minHitDist2 = Infinity;
+				forEachBubble((r, c, b) => {
+					const { x: cx, y: cy } = cellCenter(r, c);
+					const dx = projectile.x - cx;
+					const dy = projectile.y - cy;
+					const d2 = dx * dx + dy * dy;
+					if (d2 <= (BUBBLE_DIAMETER - 0.5) * (BUBBLE_DIAMETER - 0.5)) {
+						if (d2 < minHitDist2) { minHitDist2 = d2; hitCell = { r, c }; }
+					}
+				});
+
+				const hitTop = projectile.y - BUBBLE_RADIUS <= gridTopY + 0.01;
+
+				if (hitCell || hitTop) {
+					let target = null;
+					if (hitCell) {
+						target = findClosestEmptyNeighborAround(hitCell.r, hitCell.c, projectile.x, projectile.y);
+					}
+					if (!target) {
+						// fallback: find closest empty near current position (for top hits or crowded neighbors)
+						target = findClosestEmptyCell(projectile.x, Math.max(gridTopY + BUBBLE_RADIUS, projectile.y));
+					}
+					if (target) {
+						gridRows[target.row].cells[target.col] = { color: projectile.color };
+						projectile = null;
+
+						// Pop matching cluster (3+)
+						const cluster = findClusterSameColor(target.row, target.col);
+						if (cluster.length >= 3) {
+							for (const [rr, cc] of cluster) gridRows[rr].cells[cc] = null;
+							score += cluster.length * POP_SCORE;
+							// Remove floating bubbles
+							const dropped = removeFloatingClusters();
+							if (dropped > 0) score += dropped * DROP_SCORE;
+							updateHUD();
+						}
+					} else {
+						// Nowhere to place? rare, but end the game
+						projectile = null;
+					}
+				}
+			}
+
+			// Game over check: any bubble reaches bottom
+			let touchedBottom = false;
+			forEachBubble((r, c, b) => {
+				const { y } = cellCenter(r, c);
+				if (y + BUBBLE_RADIUS >= CANVAS_HEIGHT - 1) touchedBottom = true;
+			});
+			if (touchedBottom) {
+				isGameOver = true;
+				showOverlay("Game Over", "Bubbles reached the bottom.");
+			}
+		}
+
+		function render() {
+			// clear
+			ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+			// draw subtle top gradient
+			const grad = ctx.createLinearGradient(0, 0, 0, CANVAS_HEIGHT);
+			grad.addColorStop(0, "rgba(255,255,255,0.04)");
+			grad.addColorStop(1, "rgba(255,255,255,0.00)");
+			ctx.fillStyle = grad;
+			ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+			// draw grid bubbles
+			for (let r = 0; r < gridRows.length; r++) {
+				for (let c = 0; c < gridRows[r].cells.length; c++) {
+					const bubble = gridRows[r].cells[c];
+					if (!bubble) continue;
+					const { x, y } = cellCenter(r, c);
+					drawBubble(x, y, BUBBLE_RADIUS, bubble.color);
+				}
+			}
+
+			// draw projectile
+			if (projectile) {
+				drawBubble(projectile.x, projectile.y, BUBBLE_RADIUS, projectile.color, true);
+			}
+
+			// draw shooter base and aim guide
+			drawShooter();
+
+			// next bubble preview
+			const previewX = CANVAS_WIDTH - 60;
+			const previewY = 40;
+			drawBubble(previewX, previewY, 12, nextBubbleColor, false);
+			ctx.fillStyle = "rgba(255,255,255,0.6)";
+			ctx.font = "12px system-ui, sans-serif";
+			ctx.fillText("Next", previewX - 16, previewY + 22);
+		}
+
+		function drawShooter() {
+			// base
+			ctx.save();
+			ctx.translate(CANVAS_WIDTH / 2, SHOOTER_Y + 2);
+			ctx.fillStyle = "#0b0e14";
+			ctx.strokeStyle = "rgba(255,255,255,0.08)";
+			ctx.lineWidth = 2;
+			ctx.beginPath();
+			ctx.roundRect(-38, -10, 76, 20, 10);
+			ctx.fill();
+			ctx.stroke();
+
+			// cannon/aim line
+			const dir = getAimVector();
+			ctx.strokeStyle = "rgba(92, 200, 255, 0.8)";
+			ctx.lineWidth = 3;
+			ctx.beginPath();
+			ctx.moveTo(0, -BUBBLE_RADIUS - 4);
+			ctx.lineTo(dir.x * 40, -BUBBLE_RADIUS - 4 + dir.y * 40);
+			ctx.stroke();
+
+			// current bubble sitting in cannon
+			drawBubble(0, -BUBBLE_RADIUS - 4, BUBBLE_RADIUS, currentBubbleColor, false);
+			ctx.restore();
+		}
+
+		function drawBubble(x, y, radius, color, withGloss = false) {
+			const gloss = withGloss ? 1.0 : 0.85;
+			const outer = shade(color, -0.2);
+			const inner = shade(color, 0.15);
+			const g = ctx.createRadialGradient(x - radius * 0.4, y - radius * 0.4, radius * 0.2, x, y, radius);
+			g.addColorStop(0, mix(inner, "#ffffff", 0.12 * gloss));
+			g.addColorStop(1, outer);
+			ctx.fillStyle = g;
+			ctx.beginPath();
+			ctx.arc(x, y, radius, 0, Math.PI * 2);
+			ctx.fill();
+
+			// specular highlight
+			ctx.fillStyle = "rgba(255,255,255,0.75)";
+			ctx.beginPath();
+			ctx.ellipse(x - radius * 0.4, y - radius * 0.4, radius * 0.35, radius * 0.2, -0.8, 0, Math.PI * 2);
+			ctx.fill();
+		}
+
+		// Color helpers
+		function hexToRgb(hex) {
+			hex = hex.replace("#", "");
+			const bigint = parseInt(hex, 16);
+			const r = (bigint >> 16) & 255;
+			const g = (bigint >> 8) & 255;
+			const b = bigint & 255;
+			return { r, g, b };
+		}
+		function rgbToHex(r, g, b) {
+			return "#" + [r, g, b].map(v => v.toString(16).padStart(2, "0")).join("");
+		}
+		function mix(hexA, hexB, t) {
+			const a = hexToRgb(hexA), b = hexToRgb(hexB);
+			const r = Math.round(lerp(a.r, b.r, t));
+			const g = Math.round(lerp(a.g, b.g, t));
+			const bl = Math.round(lerp(a.b, b.b, t));
+			return rgbToHex(r, g, bl);
+		}
+		function shade(hex, amount) {
+			const { r, g, b } = hexToRgb(hex);
+			const t = amount > 0 ? 255 : 0;
+			const p = Math.abs(amount);
+			return rgbToHex(
+				Math.round((t - r) * p + r),
+				Math.round((t - g) * p + g),
+				Math.round((t - b) * p + b)
+			);
+		}
+
+		// ---------- Events ----------
+		canvas.addEventListener("pointermove", (e) => {
+			const rect = canvas.getBoundingClientRect();
+			const scaleX = CANVAS_WIDTH / rect.width;
+			const scaleY = CANVAS_HEIGHT / rect.height;
+			lastPointerX = (e.clientX - rect.left) * scaleX;
+			lastPointerY = (e.clientY - rect.top) * scaleY;
+			aimAngleFromVertical = pointerToAimAngleFromVertical(lastPointerX, lastPointerY);
+		});
+		canvas.addEventListener("pointerdown", () => {
+			shoot();
+		});
+
+		document.addEventListener("keydown", (e) => {
+			if (e.code === "ArrowLeft") { isLeftPressed = true; e.preventDefault(); }
+			if (e.code === "ArrowRight") { isRightPressed = true; e.preventDefault(); }
+			if (e.code === "Space") { isSpacePressed = true; shoot(); e.preventDefault(); }
+			if (e.code === "KeyR") { resetGame(); e.preventDefault(); }
+		});
+		document.addEventListener("keyup", (e) => {
+			if (e.code === "ArrowLeft") isLeftPressed = false;
+			if (e.code === "ArrowRight") isRightPressed = false;
+			if (e.code === "Space") isSpacePressed = false;
+		});
+
+		restartBtn.addEventListener("click", () => resetGame());
+
+		// ---------- Main Loop ----------
+		function frame(ts) {
+			if (!lastTimestamp) lastTimestamp = ts;
+			const dt = Math.min(0.033, (ts - lastTimestamp) / 1000); // clamp large frame gaps
+			lastTimestamp = ts;
+
+			update(dt);
+			render();
+
+			requestAnimationFrame(frame);
+		}
+
+		// ---------- Start ----------
+		resetGame();
+		requestAnimationFrame(frame);
+
+		// ---------- Placement & Popping helpers (after start to access computed values) ----------
+		function placeAndResolveAt(row, col, color) {
+			if (!inBounds(row, col)) return;
+			if (gridRows[row].cells[col] !== null) return;
+			gridRows[row].cells[col] = { color };
+			const cluster = findClusterSameColor(row, col);
+			if (cluster.length >= 3) {
+				for (const [rr, cc] of cluster) gridRows[rr].cells[cc] = null;
+				score += cluster.length * POP_SCORE;
+				const dropped = removeFloatingClusters();
+				if (dropped > 0) score += dropped * DROP_SCORE;
+				updateHUD();
+			}
+		}
+	})();
+	</script>
+</body>
+</html>
